@@ -1,6 +1,6 @@
 # RandomForest.py
 # -------------------------------------------------------------
-# Baseline + Tuned Random Forest for aurora intensity prediction
+# Baseline + Tuned Random Forest for aurora intensity prediction (with visuals)
 # Author: Susie + Group 10 (COMPSCI 760)  — enhanced with dual-search & pipeline
 # -------------------------------------------------------------
 # This script:
@@ -15,6 +15,9 @@
 #      and picks the best by a chosen CV metric (RMSE or MAE, configurable)
 #   6. Evaluates the selected best model on VAL and TEST
 #   7. Prints baselines, (optional) simple mean-ensemble, and feature importances
+#   8. NEW: Saves visualizations (pred vs. actual, residuals, feature importance bar),
+#           and exports comparison tables (CSV/HTML). Optional classification view
+#           computes Precision/Recall/F1 + PR curve if you enable it.
 # -------------------------------------------------------------
 
 import os
@@ -24,8 +27,14 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor  # RF + ET (NEW)
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.metrics import (
+    mean_squared_error, r2_score, mean_absolute_error,
+    precision_score, recall_score, f1_score, precision_recall_curve
+)
 from sklearn.pipeline import Pipeline  # pipeline support to avoid CV leakage
+
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 # -------------------------------------------------------------
 # 0. Global knobs (you can tweak these)
@@ -48,11 +57,34 @@ N_ITER_C    = max(8, N_ITER_B)                # iterations for ExtraTrees (NEW)
 RUN_SEARCH_B = True                            # set False to skip Search B entirely
 RUN_SEARCH_C = True                            # set False to skip ExtraTrees search
 
+# ---- NEW: Visualization & output knobs ----
+SAVE_DIR_NAME = "figs_rf"
+SAVE_TABLES   = True
+
+# ---- NEW: Optional "classification view" (for Recall/F1) ----
+# Set to True to evaluate a binary event like "aurora intensity >= threshold".
+# This does NOT change training (still regression); it only evaluates classification metrics post-hoc.
+CLASSIFICATION_VIEW = False
+# Threshold for positive class (you can tune; e.g., choose a physical intensity, or a quantile).
+CLASS_THRESH = 0.3      # example value; adjust to your scale
+# Or you can set as quantile if you prefer (set to None to disable quantile override)
+CLASS_THRESH_QUANTILE = None  # e.g., 0.8 means top 20% treated as positive
+
 # -------------------------------------------------------------
 # 1. Load the dataset
 # -------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # path of this script
 CSV_PATH = os.path.join(BASE_DIR, "..", "datasets", "final-planb-24.csv")
+
+# Prepare output dir
+SAVE_DIR = os.path.join(BASE_DIR, SAVE_DIR_NAME)
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+def _savefig(path, tight=True, dpi=150):
+    if tight:
+        plt.tight_layout()
+    plt.savefig(path, dpi=dpi)
+    print(f"[Saved] {path}")
 
 df = pd.read_csv(CSV_PATH, parse_dates=["time"])
 print("Loaded:", CSV_PATH)
@@ -111,6 +143,9 @@ X_test_df  = X_all.loc[test_idx]
 y_train = y_all[df.index.get_indexer(train_idx)]
 y_val   = y_all[df.index.get_indexer(val_idx)]
 y_test  = y_all[df.index.get_indexer(test_idx)]
+
+t_val  = df.loc[val_idx,  "time"].values
+t_test = df.loc[test_idx, "time"].values
 
 # Safety check: make sure targets have no NaN
 assert not np.isnan(y_train).any(), "y_train still has NaN!"
@@ -335,24 +370,6 @@ eval_and_print("TEST", y_test, test_pred)
 # Baseline comparisons: mean and median predictors
 # -------------------------------------------------------------
 def baseline_report(y_true, name="mean"):
-    """
-    Print constant-predictor baselines for a given target vector.
-
-    What it does:
-      - Builds a trivial predictor that always outputs a constant:
-          * 'mean'  : predicts the mean of y_true for every sample
-          * 'median': predicts the median of y_true for every sample
-      - Evaluates that constant predictor using RMSE and MAE.
-
-    Why this matters:
-      - These are strong sanity-check baselines. Your fitted model should beat them.
-      - If your model's RMSE/MAE is not lower than these (and R² ≤ 0),
-        the model isn't extracting signal beyond a constant.
-
-    Notes on metrics:
-      - RMSE = sqrt(MSE) (same unit as target, e.g., Rayleigh)
-      - MAE  = Mean Absolute Error (unit = target)
-    """
     if name == "mean":
         yhat = np.full_like(y_true, fill_value=np.mean(y_true), dtype=float)
     elif name == "median":
@@ -442,10 +459,20 @@ if ENSEMBLE_RESULTS is not None:
     rows.append(("VAL",  "Ensemble", rmse_v, mae_v))
     rows.append(("TEST", "Ensemble", rmse_t, mae_t))
 
-print(pd.DataFrame(rows, columns=["Split", "Method", "RMSE", "MAE"]).to_string(index=False))
+comparison_df = pd.DataFrame(rows, columns=["Split", "Method", "RMSE", "MAE"])
+print(comparison_df.to_string(index=False))
+
+# Save tables
+if SAVE_TABLES:
+    comp_csv  = os.path.join(SAVE_DIR, "comparison_metrics.csv")
+    comp_html = os.path.join(SAVE_DIR, "comparison_metrics.html")
+    comparison_df.to_csv(comp_csv, index=False)
+    comparison_df.to_html(comp_html, index=False)
+    print(f"[Saved] {comp_csv}")
+    print(f"[Saved] {comp_html}")
 
 # -------------------------------------------------------------
-# 7. Feature importance analysis
+# 7. Feature importance analysis (+ bar plot)
 # -------------------------------------------------------------
 def _extract_model_and_importances(estimator):
     """
@@ -474,3 +501,121 @@ else:
     print("\nTop-15 feature importances:")
     for name, score in top_feats:
         print(f"{name:20s}  {score:.4f}")
+
+    # ---- NEW: bar chart of top importances ----
+    plt.figure(figsize=(8, 5))
+    names = [x[0] for x in top_feats]
+    vals  = [x[1] for x in top_feats]
+    ax = plt.gca()
+    ax.barh(names[::-1], vals[::-1])
+    ax.set_xlabel("Importance")
+    ax.set_title("Top-15 Feature Importances")
+    _savefig(os.path.join(SAVE_DIR, "feature_importance_top15.png"))
+    plt.close()
+
+# -------------------------------------------------------------
+# 8. NEW — Visualizations for predictions and residuals
+# -------------------------------------------------------------
+def plot_pred_vs_actual(y_true, y_pred, split, save_path):
+    plt.figure(figsize=(6, 6))
+    plt.scatter(y_true, y_pred, s=10, alpha=0.6)
+    minv = float(np.nanmin([y_true.min(), y_pred.min()]))
+    maxv = float(np.nanmax([y_true.max(), y_pred.max()]))
+    plt.plot([minv, maxv], [minv, maxv], linestyle='--')
+    plt.xlabel("Actual")
+    plt.ylabel("Predicted")
+    plt.title(f"{split} — Predicted vs. Actual")
+    _savefig(save_path)
+    plt.close()
+
+def plot_time_series(t, y_true, y_pred, split, save_path):
+    plt.figure(figsize=(10, 4))
+    plt.plot(t, y_true, linewidth=1, label="Actual")
+    plt.plot(t, y_pred, linewidth=1, alpha=0.9, label="Predicted")
+    plt.xlabel("Time")
+    plt.ylabel(TARGET_COL)
+    plt.title(f"{split} — Time Series: Actual vs. Predicted")
+    plt.legend()
+    _savefig(save_path)
+    plt.close()
+
+def plot_residuals_hist(y_true, y_pred, split, save_path):
+    resid = y_pred - y_true
+    plt.figure(figsize=(7, 4))
+    plt.hist(resid, bins=40, alpha=0.8)
+    plt.xlabel("Residual (Pred - Actual)")
+    plt.ylabel("Count")
+    plt.title(f"{split} — Residuals Histogram")
+    _savefig(save_path)
+    plt.close()
+
+def plot_bar_metric_comparison(df_metrics, split, save_path):
+    sub = df_metrics[df_metrics["Split"] == split].copy()
+    # bar chart: RMSE / MAE side-by-side
+    labels = sub["Method"].tolist()
+    x = np.arange(len(labels))
+    width = 0.38
+
+    fig = plt.figure(figsize=(9, 4.5))
+    ax = plt.gca()
+    ax.bar(x - width/2, sub["RMSE"].values, width, label="RMSE")
+    ax.bar(x + width/2, sub["MAE"].values,  width, label="MAE")
+    ax.set_xticks(x, labels, rotation=30, ha='right')
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, integer=False))
+    ax.set_title(f"{split} — Model vs Baselines")
+    ax.legend()
+    _savefig(save_path)
+    plt.close()
+
+# Produce plots for VAL / TEST
+plot_pred_vs_actual(y_val,  val_pred,  "VAL",  os.path.join(SAVE_DIR, "val_pred_vs_actual.png"))
+plot_pred_vs_actual(y_test, test_pred, "TEST", os.path.join(SAVE_DIR, "test_pred_vs_actual.png"))
+
+plot_time_series(t_val,  y_val,  val_pred,  "VAL",  os.path.join(SAVE_DIR, "val_timeseries.png"))
+plot_time_series(t_test, y_test, test_pred, "TEST", os.path.join(SAVE_DIR, "test_timeseries.png"))
+
+plot_residuals_hist(y_val,  val_pred,  "VAL",  os.path.join(SAVE_DIR, "val_residuals_hist.png"))
+plot_residuals_hist(y_test, test_pred, "TEST", os.path.join(SAVE_DIR, "test_residuals_hist.png"))
+
+plot_bar_metric_comparison(comparison_df, "VAL",  os.path.join(SAVE_DIR, "val_model_vs_baselines.png"))
+plot_bar_metric_comparison(comparison_df, "TEST", os.path.join(SAVE_DIR, "test_model_vs_baselines.png"))
+
+# -------------------------------------------------------------
+# 9. NEW — Optional classification view: Precision / Recall / F1 + PR curve
+# -------------------------------------------------------------
+def _maybe_get_threshold(y_true):
+    if CLASS_THRESH_QUANTILE is not None:
+        return float(np.quantile(y_true, CLASS_THRESH_QUANTILE))
+    return CLASS_THRESH
+
+if CLASSIFICATION_VIEW:
+    thr_val  = _maybe_get_threshold(y_val)
+    thr_test = _maybe_get_threshold(y_test)
+
+    y_val_bin  = (y_val  >= thr_val).astype(int)
+    y_test_bin = (y_test >= thr_test).astype(int)
+
+    # Use regression outputs as scores; binarize by same threshold for label
+    val_pred_bin  = (val_pred  >= thr_val).astype(int)
+    test_pred_bin = (test_pred >= thr_test).astype(int)
+
+    def _cls_report(split, y_true_bin, y_pred_bin, scores, save_prefix):
+        prec = precision_score(y_true_bin, y_pred_bin, zero_division=0)
+        rec  = recall_score(y_true_bin, y_pred_bin, zero_division=0)
+        f1   = f1_score(y_true_bin, y_pred_bin, zero_division=0)
+        print(f"[{split} Classification] Precision: {prec:.4f}  Recall: {rec:.4f}  F1: {f1:.4f}")
+
+        # PR curve using continuous score (the regressed intensity)
+        p, r, _ = precision_recall_curve(y_true_bin, scores)
+        plt.figure(figsize=(6, 5))
+        plt.plot(r, p, linewidth=2)
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title(f"{split} — Precision-Recall Curve")
+        _savefig(os.path.join(SAVE_DIR, f"{save_prefix}_pr_curve.png"))
+        plt.close()
+
+    _cls_report("VAL",  y_val_bin,  val_pred_bin,  val_pred,  "val")
+    _cls_report("TEST", y_test_bin, test_pred_bin, test_pred, "test")
+else:
+    print("\n[Info] Classification view disabled (set CLASSIFICATION_VIEW=True to compute Recall/F1 & PR curves).")
