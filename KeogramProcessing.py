@@ -414,7 +414,7 @@ if __name__ == "__main__":
     process_multiple_years(
         base_dir=".",
         year_range=None,  # Auto-detect, or specify (2012, 2024)
-        n_sections=8,
+        n_sections=24,
         red_ratio_threshold=0.50,
         require_min_valid_frac=0.30,
         use_invalid_mask=True

@@ -3,6 +3,18 @@ keogram-out/
 keogram-out2/
 keogram-out2019/
 keogram-out2015/
+keogram-out2012/
+keogram-out2013/
+keogram-out2014/
+keogram-out2016/
+keogram-out2017/
+keogram-out2018/
+keogram-out2019/
+keogram-out2020/
+keogram-out2021/
+keogram-out2022/
+keogram-out2023/
+keogram-out2024/
 
 # generated segment folders
 segments-out/
@@ -11,7 +23,11 @@ segments-out2019/
 segments-out2015/
 
 # generated CSVs
+# Ignore all CSV files
 *.csv
+
+# BUT keep the weighted CSV files (before final processing)
+!*_weighted*.csv
 2019/
 2020/
 2015/
