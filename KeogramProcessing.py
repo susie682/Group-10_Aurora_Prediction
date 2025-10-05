@@ -187,16 +187,16 @@ def write_segment_stats_csv_with_red_filter(
         output_csv="keogram_segment_stats.csv",
         n_sections=8,
         red_ratio_threshold=0.50,
-        require_min_valid_frac=0.30,     # skip if <30% pixels are valid
-        use_invalid_mask=True            # apply white/purple mask before ratios/stats
+        require_min_valid_frac=0.30,
+        use_invalid_mask=True
     ):
     """
     For every *inpaint.png (and *inpant.png) under input_dir:
-      - for each of 8 segments:
+      - for each segment:
           * compute valid mask (optional)
           * compute red_ratio = (# red & valid) / (# valid)
-          * if red_ratio > threshold -> skip segment (do not write a row)
-          * else write: YYYY-MM-DD-h1:h2, mean, median, max  (on valid pixels only)
+          * add sunlight_contamination column (1 if red_ratio > threshold, else 0)
+          * always write row with: segment, mean, median, max, sunlight_contamination
     """
     in_dir = Path(input_dir)
     files = sorted(set(in_dir.glob("**/*inpaint.png")) |
@@ -205,15 +205,9 @@ def write_segment_stats_csv_with_red_filter(
         print(f"[warn] No inpainted PNGs found under {in_dir}")
         return
 
-    # optional audit file for excluded segments
-    excluded_path = Path(output_csv).with_name("keogram_segment_excluded.csv")
-
-    with open(output_csv, "w", newline="") as f_out, \
-         open(excluded_path, "w", newline="") as f_exc:
+    with open(output_csv, "w", newline="") as f_out:
         out_w = csv.writer(f_out)
-        exc_w = csv.writer(f_exc)
-        out_w.writerow(["segment", "mean", "median", "max"])
-        exc_w.writerow(["segment", "reason", "red_ratio", "valid_frac"])
+        out_w.writerow(["segment", "mean", "median", "max", "sunlight_contamination"])
 
         for p in files:
             rgb, H, W = convert_image_to_RGBarray(p)
@@ -230,36 +224,101 @@ def write_segment_stats_csv_with_red_filter(
                 seg_rgb  = rgb[:, c0:c1, :]
                 seg_gray = gray[:, c0:c1]
 
-                # valid pixels (optional) + red ratio measured on valid pixels only
+                # valid pixels + red ratio
                 valid = valid_mask_white_purple(seg_rgb) if use_invalid_mask else np.ones(seg_gray.shape, bool)
                 valid_count = int(valid.sum())
-                valid_frac  = valid_count / (seg_gray.size)
+                valid_frac  = valid_count / (seg_gray.size) if seg_gray.size > 0 else 0
 
+                # determine sunlight contamination
+                sunlight_contamination = 0
+                
                 if valid_frac < require_min_valid_frac:
-                    seg_label = f"{date_fmt}-{start_h}:{end_h}"
-                    exc_w.writerow([seg_label, "low_valid_coverage", "", f"{valid_frac:.3f}"])
-                    continue
+                    sunlight_contamination = 1  # mark as contaminated if not enough valid pixels
+                else:
+                    red_mask = make_red_mask_hsv(seg_rgb)
+                    red_ratio = (red_mask & valid).sum() / valid_count if valid_count > 0 else 0
+                    if red_ratio > red_ratio_threshold:
+                        sunlight_contamination = 1
 
-                red_mask = make_red_mask_hsv(seg_rgb)
-                red_ratio = (red_mask & valid).sum() / valid_count
-
-                if red_ratio > red_ratio_threshold:
-                    seg_label = f"{date_fmt}-{start_h}:{end_h}"
-                    exc_w.writerow([seg_label, "red_ratio_exceeds_threshold", f"{red_ratio:.3f}", f"{valid_frac:.3f}"])
-                    continue
-
-                # compute stats ONLY on valid pixels
-                seg_vals = seg_gray[valid].astype(float)
-                mean_v   = float(seg_vals.mean())
-                median_v = float(np.median(seg_vals))
-                max_v    = float(seg_vals.max())
+                # compute stats on valid pixels
+                seg_vals = seg_gray[valid].astype(float) if valid_count > 0 else np.array([0.0])
+                mean_v   = float(seg_vals.mean()) if len(seg_vals) > 0 else 0.0
+                median_v = float(np.median(seg_vals)) if len(seg_vals) > 0 else 0.0
+                max_v    = float(seg_vals.max()) if len(seg_vals) > 0 else 0.0
 
                 seg_label = f"{date_fmt}-{start_h}"
-                out_w.writerow([seg_label, f"{mean_v:.2f}", f"{median_v:.2f}", f"{max_v:.2f}"])
+                out_w.writerow([seg_label, f"{mean_v:.2f}", f"{median_v:.2f}", f"{max_v:.2f}", sunlight_contamination])
 
-            print(f"[ok] {p.name} -> CSV rows written (red-threshold={red_ratio_threshold:.2f})")
+            print(f"[ok] {p.name} -> {n_sections} rows written")
 
-    print(f"[done] Stats -> {output_csv} | Exclusions -> {excluded_path}")
+    print(f"[done] Stats with sunlight_contamination flag -> {output_csv}")
+
+def process_multiple_years(
+        base_dir=".",
+        year_range=None,
+        n_sections=24,
+        red_ratio_threshold=0.50,
+        require_min_valid_frac=0.30,
+        use_invalid_mask=True
+    ):
+    """
+    Process multiple years of keogram data automatically.
+    
+    Args:
+        base_dir: Base directory containing year folders
+        year_range: Tuple of (start_year, end_year) inclusive, or None to auto-detect
+        n_sections: Number of time segments per day
+        red_ratio_threshold: Threshold for red pixel ratio (0.50 = 50%)
+        require_min_valid_frac: Minimum fraction of valid pixels required
+        use_invalid_mask: Whether to use white/purple masking
+    """
+    base_path = Path(base_dir)
+    
+    # Auto-detect year directories if not specified
+    if year_range is None:
+        year_dirs = []
+        for item in base_path.iterdir():
+            if item.is_dir():
+                # Look for directories with 'keogram-out' followed by 4 digits
+                match = re.search(r'keogram-out(\d{4})', item.name)
+                if match:
+                    year_dirs.append((int(match.group(1)), item))
+        year_dirs.sort()
+    else:
+        start_year, end_year = year_range
+        year_dirs = []
+        for year in range(start_year, end_year + 1):
+            input_dir = base_path / f"keogram-out{year}"
+            if input_dir.exists():
+                year_dirs.append((year, input_dir))
+    
+    if not year_dirs:
+        print(f"[warn] No year directories found in {base_path}")
+        return
+    
+    print(f"[info] Found {len(year_dirs)} year directories to process")
+    
+    for year, input_dir in year_dirs:
+        output_csv = base_path / f"keogram_segment_stats{year}_{n_sections}hours.csv"
+        
+        print(f"\n{'='*60}")
+        print(f"[info] Processing year {year}")
+        print(f"[info] Input: {input_dir}")
+        print(f"[info] Output: {output_csv}")
+        print(f"{'='*60}")
+        
+        write_segment_stats_csv_with_red_filter(
+            input_dir=str(input_dir),
+            output_csv=str(output_csv),
+            n_sections=n_sections,
+            red_ratio_threshold=red_ratio_threshold,
+            require_min_valid_frac=require_min_valid_frac,
+            use_invalid_mask=use_invalid_mask
+        )
+    
+    print(f"\n{'='*60}")
+    print(f"[done] Processed all {len(year_dirs)} years")
+    print(f"{'='*60}")
 
 def process_all_with_csv(input_dir="keogram-out2",
                          output_dir="segments-out",
@@ -350,19 +409,33 @@ def process_all(input_dir="keogram-out2", output_dir="segments-out", n_sections=
         print(f"[ok] Saved {len(out_paths)} slices + grid -> {per_img_out}")
 
 if __name__ == "__main__":
-    # process_all(input_dir="keogram-out2", output_dir="segments-out", n_sections=8)
-    process_all_with_csv(
-        input_dir="keogram-out2015",
-        output_dir="segments-out2015",
-        output_csv="keogram_segment_stats2015.csv",
-        n_sections=8
+    # OPTION 1: Process all years automatically (2012-2024)
+    # Auto-detects all keogram-out#### directories
+    process_multiple_years(
+        base_dir=".",
+        year_range=None,  # Auto-detect, or specify (2012, 2024)
+        n_sections=24,
+        red_ratio_threshold=0.50,
+        require_min_valid_frac=0.30,
+        use_invalid_mask=True
     )
-
-    write_segment_stats_csv_with_red_filter(
-            input_dir="keogram-out2015",
-            output_csv="keogram_segment_stats2015-v2.csv",
-            n_sections=8,
-            red_ratio_threshold=0.50,   # your 50% rule
-            require_min_valid_frac=0.30,
-            use_invalid_mask=True
-        )
+    
+    # OPTION 2: Process specific year range
+    # process_multiple_years(
+    #     base_dir=".",
+    #     year_range=(2012, 2024),
+    #     n_sections=24,
+    #     red_ratio_threshold=0.50,
+    #     require_min_valid_frac=0.30,
+    #     use_invalid_mask=True
+    # )
+    
+    # OPTION 3: Process single year (legacy method)
+    # write_segment_stats_csv_with_red_filter(
+    #     input_dir="keogram-out2021",
+    #     output_csv="keogram_segment_stats2021_24hours.csv",
+    #     n_sections=24,
+    #     red_ratio_threshold=0.50,
+    #     require_min_valid_frac=0.30,
+    #     use_invalid_mask=True
+    # )
