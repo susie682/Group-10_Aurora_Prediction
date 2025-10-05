@@ -44,7 +44,7 @@ def add_dark_segment_flag(input_csv, output_csv=None, median_threshold=15):
 
 def process_all_year_csvs(
         base_dir=".",
-        csv_pattern="keogram_segment_stats{}_{:d}hours-weighted.csv",
+        csv_pattern="keogram_segment_stats{}_{:d}hours_weighted.csv",
         hours=[24],  # List of hour values to search for
         output_pattern=None,  # If None, will insert "_filtered" before extension
         year_range=None,
@@ -69,10 +69,10 @@ def process_all_year_csvs(
     if year_range is None:
         csv_files = []
         # Look for files matching the exact pattern
-        for csv_file in base_path.glob("keogram_segment_stats*hours-weighted.csv"):
+        for csv_file in base_path.glob("keogram_segment_stats*hours_weighted.csv"):
             # Extract year and hours from filename
             # Pattern: keogram_segment_stats2012_24hours-weighted.csv
-            match = re.search(r'keogram_segment_stats(\d{4})_(\d+)hours-weighted\.csv', csv_file.name)
+            match = re.search(r'keogram_segment_stats(\d{4})_(\d+)hours_weighted\.csv', csv_file.name)
             if match:
                 year = int(match.group(1))
                 hour_val = int(match.group(2))
@@ -90,7 +90,7 @@ def process_all_year_csvs(
     
     if not csv_files:
         print(f"[warn] No CSV files found in {base_path}")
-        print(f"[info] Looking for pattern: keogram_segment_stats*_*hours-weighted.csv")
+        print(f"[info] Looking for pattern: keogram_segment_stats*_*hours_weighted.csv")
         print(f"[info] With hours: {hours}")
         return
     
@@ -106,13 +106,13 @@ def process_all_year_csvs(
         if overwrite_original:
             output_file = csv_file
         else:
-            # Auto-generate output filename by inserting "_filtered" before extension
+            # Auto-generate output filename: replace "-weighted" with "-weighted_final"
             if output_pattern:
                 output_file = base_path / output_pattern.format(year, hour_val)
             else:
-                output_file = csv_file.with_name(
-                    csv_file.stem + "_filtered" + csv_file.suffix
-                )
+                # keogram_segment_stats2012_24hours-weighted.csv -> keogram_segment_stats2012_24hours-weighted_final.csv
+                new_name = csv_file.name.replace('_weighted.csv', '_weighted_final.csv')
+                output_file = base_path / new_name
         
         df = add_dark_segment_flag(
             input_csv=str(csv_file),
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     # Finds: keogram_segment_stats2012_24hours-weighted.csv, etc.
     process_all_year_csvs(
         base_dir=".",
-        hours=[24],  # Only process 24-hour segments
+        hours=[8,24],  # Only process 24-hour segments
         year_range=None,  # Auto-detect all years
         median_threshold=15,
         overwrite_original=False  # Creates new files with "_filtered" suffix

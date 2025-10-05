@@ -299,7 +299,7 @@ def process_multiple_years(
     print(f"[info] Found {len(year_dirs)} year directories to process")
     
     for year, input_dir in year_dirs:
-        output_csv = base_path / f"keogram_segment_stats{year}_{n_sections}hours.csv"
+        output_csv = base_path / f"keogram_segment_stats{year}_{n_sections}hours_weighted.csv"
         
         print(f"\n{'='*60}")
         print(f"[info] Processing year {year}")
@@ -414,7 +414,7 @@ if __name__ == "__main__":
     process_multiple_years(
         base_dir=".",
         year_range=None,  # Auto-detect, or specify (2012, 2024)
-        n_sections=24,
+        n_sections=8,
         red_ratio_threshold=0.50,
         require_min_valid_frac=0.30,
         use_invalid_mask=True
