@@ -109,9 +109,13 @@ y_all_raw = df[TARGET_COL].values  # [A2 CHANGE] keep raw y for transforms
 # -------------------------------------------------------------
 # 3. Time-based train/val/test split
 # -------------------------------------------------------------
-train_idx = df[(df["time"] < "2018-01-01")].index
-val_idx   = df[(df["time"] >= "2018-01-01") & (df["time"] < "2019-01-01")].index
-test_idx  = df[(df["time"] >= "2019-01-01") & (df["time"] < "2021-01-01")].index
+# For dataset covering 2012–2024:
+#   Train = 2012–2020
+#   Validation = 2021-2022
+#   Test = 2023–2024
+train_idx = df[(df["time"] < "2021-01-01")].index
+val_idx   = df[(df["time"] >= "2021-01-01") & (df["time"] < "2023-01-01")].index
+test_idx  = df[(df["time"] >= "2023-01-01") & (df["time"] < "2025-01-01")].index
 
 print("Split sizes:",
       "train =", len(train_idx),
