@@ -1,0 +1,21 @@
+{
+  "load_data": 0.15003908300423063,
+  "split_time": 0.001252333022421226,
+  "target_engineering": 0.0065828749793581665,
+  "search_A_fit": 652.3627058340062,
+  "search_B_fit": 1070.8930137910065,
+  "search_C_fit": 284.25801079100347,
+  "val_predict": 0.05093183400458656,
+  "test_predict": 0.05461966700386256,
+  "val_invert": 0.0005330420099198818,
+  "val_metrics": 0.13246312501723878,
+  "test_invert": 8.529200567863882e-05,
+  "test_metrics": 0.04941312500159256,
+  "n_features": 22,
+  "n_rows_total": 10144,
+  "n_rows_train": 7430,
+  "n_rows_val": 849,
+  "n_rows_test": 1865,
+  "search_total_fit": 2007.5137304160162,
+  "eval_total": 0.28742775102728046
+}
