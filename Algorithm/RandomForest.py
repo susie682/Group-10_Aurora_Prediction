@@ -74,7 +74,7 @@ CLASS_THRESH_QUANTILE = None  # e.g., 0.8 means top 20% treated as positive
 # 1. Load the dataset
 # -------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # path of this script
-CSV_PATH = os.path.join(BASE_DIR, "..", "datasets", "final-planb-24.csv")
+CSV_PATH = os.path.join(BASE_DIR, "..", "datasets", "final_planb_notWeighted_10_filtered.csv")
 
 # Prepare output dir
 SAVE_DIR = os.path.join(BASE_DIR, SAVE_DIR_NAME)
@@ -126,9 +126,14 @@ y_all = df[TARGET_COL].values
 #   Train = 2012–2017
 #   Validation = 2018
 #   Test = 2019–2020
-train_idx = df[(df["time"] < "2018-01-01")].index
-val_idx   = df[(df["time"] >= "2018-01-01") & (df["time"] < "2019-01-01")].index
-test_idx  = df[(df["time"] >= "2019-01-01") & (df["time"] < "2021-01-01")].index
+# train_idx = df[(df["time"] < "2018-01-01")].index
+# val_idx   = df[(df["time"] >= "2018-01-01") & (df["time"] < "2019-01-01")].index
+# test_idx  = df[(df["time"] >= "2019-01-01") & (df["time"] < "2021-01-01")].index
+
+df = df.sort_values("time")
+train_idx = df[df["time"] <  "2024-01-01"].index
+val_idx   = df[(df["time"] >= "2024-01-01") & (df["time"] < "2024-07-01")].index
+test_idx  = df[(df["time"] >= "2024-07-01") & (df["time"] < "2025-01-01")].index
 
 print("Split sizes:",
       "train =", len(train_idx),

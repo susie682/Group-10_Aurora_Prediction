@@ -1,9 +1,11 @@
 # RandomForest-Log.py
 # -------------------------------------------------------------
 # Fast ExtraTrees + A2 target engineering + Advanced Metrics
+# + Runtime & Data Size Reporting
 # Author: Susie + Group 10 (COMPSCI 760) — streamlined for speed
 # -------------------------------------------------------------
 import os
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -26,7 +28,7 @@ REFIT_METRIC  = "mae"
 
 FAST_MODE   = True
 CPU_COUNT   = os.cpu_count() or 2
-N_JOBS      = min(4, CPU_COUNT)     # 如遇到 macOS 的 resource_tracker 警告，可先改为 1
+N_JOBS      = min(4, CPU_COUNT)     # 如遇到 macOS resource_tracker 警告，可暂改为 1
 N_SPLITS    = 2
 N_ITER_C    = 6
 RUN_SEARCH_C = True
@@ -44,16 +46,25 @@ REWEIGHT_ALPHA   = 6.0
 REWEIGHT_GAMMA   = 3.0
 
 # =========================
-# 1) IO & SETUP
+# Runtime helpers
 # =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "..", "datasets")
-CSV_PATH = os.path.join(DATA_DIR, "final_planb_moonWeighted_50.csv")
-if not os.path.exists(CSV_PATH):
-    raise FileNotFoundError(f"Dataset not found: {CSV_PATH}")
+TIMINGS = []
+def _tic():
+    return time.perf_counter()
 
-SAVE_DIR = os.path.join(BASE_DIR, SAVE_DIR_NAME)
-os.makedirs(SAVE_DIR, exist_ok=True)
+def _tock(t0, name):
+    dt = time.perf_counter() - t0
+    TIMINGS.append((name, dt))
+    print(f"[Time] {name}: {dt:.2f} s")
+    return dt
+
+def _save_runtime_report(save_dir, extra_info):
+    df = pd.DataFrame(TIMINGS, columns=["Stage", "Seconds"])
+    for k, v in extra_info.items():
+        df.loc[df.shape[0]] = [k, v]
+    path = os.path.join(save_dir, "runtime_report.csv")
+    df.to_csv(path, index=False)
+    print(f"[Saved] {path}")
 
 def _savefig(path, tight=True, dpi=150):
     if tight:
@@ -61,14 +72,33 @@ def _savefig(path, tight=True, dpi=150):
     plt.savefig(path, dpi=dpi)
     print(f"[Saved] {path}")
 
+# =========================
+# 1) IO & SETUP
+# =========================
+t0_all = _tic()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "..", "datasets")
+# 你的当前数据路径（按你的发帖保持不变）
+CSV_PATH = os.path.join(DATA_DIR, "final_planb_notWeighted_10_filtered.csv")
+if not os.path.exists(CSV_PATH):
+    raise FileNotFoundError(f"Dataset not found: {CSV_PATH}")
+
+SAVE_DIR = os.path.join(BASE_DIR, SAVE_DIR_NAME)
+os.makedirs(SAVE_DIR, exist_ok=True)
+
 print("Loaded:", CSV_PATH)
+t0 = _tic()
 df = pd.read_csv(CSV_PATH, parse_dates=["time"])
+_tock(t0, "Load CSV")
+
 print("Shape before drop:", df.shape)
 print("Time range:", df["time"].min(), "->", df["time"].max(), flush=True)
 
 # =========================
 # 2) TARGET / FEATURES
 # =========================
+t0 = _tic()
 TARGET_COL = "keogram_mean"
 before = len(df)
 df = df.dropna(subset=[TARGET_COL]).copy()
@@ -81,14 +111,19 @@ assert TARGET_COL not in features
 
 X_all = df[features]
 y_all_raw = df[TARGET_COL].values
+n_rows, n_features = X_all.shape
+print(f"[Data] rows={n_rows}, features={n_features}")
+_tock(t0, "Drop NaN & select features")
 
 # =========================
 # 3) TIME SPLIT（固定年段）
 # =========================
+t0 = _tic()
 df = df.sort_values("time")
-train_idx = df[df["time"] <  "2021-01-01"].index
-val_idx   = df[(df["time"] >= "2021-01-01") & (df["time"] < "2023-01-01")].index
-test_idx  = df[(df["time"] >= "2023-01-01") & (df["time"] < "2025-01-01")].index
+# 你给定的 2024 年内切分
+train_idx = df[df["time"] <  "2024-01-01"].index
+val_idx   = df[(df["time"] >= "2024-01-01") & (df["time"] < "2024-07-01")].index
+test_idx  = df[(df["time"] >= "2024-07-01") & (df["time"] < "2025-01-01")].index
 
 print("Split sizes:", "train =", len(train_idx), "val =", len(val_idx), "test =", len(test_idx), flush=True)
 
@@ -103,11 +138,14 @@ y_test_raw  = y_all_raw[df.index.get_indexer(test_idx)]
 t_val  = df.loc[val_idx,  "time"].values
 t_test = df.loc[test_idx, "time"].values
 
+# 分别打印每个 split 的 (rows, features)
+print(f"[Data|Train] rows={X_train_df.shape[0]}, features={X_train_df.shape[1]}")
+print(f"[Data|Val]   rows={X_val_df.shape[0]}, features={X_val_df.shape[1]}")
+print(f"[Data|Test]  rows={X_test_df.shape[0]}, features={X_test_df.shape[1]}")
 
 assert not np.isnan(y_train_raw).any()
 assert not np.isnan(y_val_raw).any()
 assert not np.isnan(y_test_raw).any()
-
 
 if not PIPELINE_MODE:
     imputer = SimpleImputer(strategy="median")
@@ -117,10 +155,12 @@ if not PIPELINE_MODE:
 else:
     print("PIPELINE_MODE=True: imputer will be fitted inside CV folds via Pipeline.")
     X_train, X_val, X_test = X_train_df, X_val_df, X_test_df
+_tock(t0, "Time split & (optional) impute")
 
 # =========================
 # 4) TARGET ENGINEERING
 # =========================
+t0 = _tic()
 y_cap = y_train_raw.copy()
 if USE_WINSOR_Y:
     cap_up = float(np.quantile(y_train_raw, Y_WINSOR_UP_Q))
@@ -143,6 +183,7 @@ if USE_REWEIGHT:
     sample_weight_train = 1.0 + REWEIGHT_ALPHA * (boost_zone ** REWEIGHT_GAMMA)
 else:
     sample_weight_train = None
+_tock(t0, "Target engineering (winsor/log/reweight)")
 
 # =========================
 # 5) MODEL: ExtraTrees + RandomizedSearchCV
@@ -180,6 +221,7 @@ fitkw_et = {"et__sample_weight": sample_weight_train} if (PIPELINE_MODE and USE_
 param_et = {_prefix_et(k): v for k, v in common_space.items()}
 param_et[_prefix_et("criterion")] = ["squared_error", "absolute_error"] if HAS_ABS_CRITERION_ET else ["squared_error"]
 
+t0 = _tic()
 search_et = RandomizedSearchCV(
     estimator=_make_estimator_et(),
     param_distributions=param_et,
@@ -188,6 +230,8 @@ search_et = RandomizedSearchCV(
 )
 print("\n[Search C] ExtraTrees ...")
 search_et.fit(X_train, y_train, **fitkw_et)
+_tock(t0, "Model search+fit (ExtraTrees)")
+
 print("  C: best params:", search_et.best_params_)
 print(f"  C: best CV {REFIT_METRIC.upper()}: {-search_et.best_score_:.4f}")
 
@@ -205,11 +249,13 @@ def eval_and_print(split_name, y_true_raw, y_pred_transformed):
     print(f"{split_name} -> MSE: {mse:.4f}  MAE: {mae:.4f}  R2: {r2:.4f}", flush=True)
     return y_pred_raw
 
+t0 = _tic()
 print("\n=== Evaluation (Selected Best Model) ===", flush=True)
 val_pred_t  = best_estimator.predict(X_val_df)
 test_pred_t = best_estimator.predict(X_test_df)
 val_pred_raw  = eval_and_print("VAL ",  y_val_raw,  val_pred_t)
 test_pred_raw = eval_and_print("TEST",  y_test_raw, test_pred_t)
+_tock(t0, "Evaluation (predict+metrics)")
 
 # =========================
 # 7) BASELINES + 表格
@@ -262,6 +308,7 @@ def _extract_model_and_importances(estimator):
         return model, model.feature_importances_
     return model, None
 
+t0 = _tic()
 model_, importances = _extract_model_and_importances(best_estimator)
 if importances is not None:
     order = np.argsort(importances)[::-1][:15]
@@ -278,9 +325,10 @@ if importances is not None:
     ax.set_title("Top-15 Feature Importances (ExtraTrees)")
     _savefig(os.path.join(SAVE_DIR, "feature_importance_top15.png"))
     plt.close()
+_tock(t0, "Feature importance & plot")
 
 # =========================
-# 9) PLOTS (RAW scale) — 函数与调用
+# 9) PLOTS (RAW scale)
 # =========================
 def plot_pred_vs_actual(y_true_raw, y_pred_raw, split, save_path):
     plt.figure(figsize=(6, 6))
@@ -318,13 +366,13 @@ def plot_bar_metric_comparison(df_metrics, split, save_path):
     ax.bar(x - width/2, sub["RMSE"].values, width, label="RMSE")
     ax.bar(x + width/2, sub["MAE"].values,  width, label="MAE")
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=30, ha='right')
+    ax.set_xticklabels(labels, rotation=30, ha='right')  # 旋转防重叠
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6, integer=False))
     ax.set_title(f"{split} — Model vs Baselines")
     ax.legend()
     _savefig(save_path); plt.close()
 
-# —— 调用（你之前版本里这几行不见了）
+t0 = _tic()
 plot_pred_vs_actual(y_val_raw,  val_pred_raw,  "VAL",  os.path.join(SAVE_DIR, "val_pred_vs_actual.png"))
 plot_pred_vs_actual(y_test_raw, test_pred_raw, "TEST", os.path.join(SAVE_DIR, "test_pred_vs_actual.png"))
 plot_time_series(t_val,  y_val_raw,  val_pred_raw,  "VAL",  os.path.join(SAVE_DIR, "val_timeseries.png"))
@@ -333,6 +381,7 @@ plot_residuals_hist(y_val_raw,  val_pred_raw,  "VAL",  os.path.join(SAVE_DIR, "v
 plot_residuals_hist(y_test_raw, test_pred_raw, "TEST", os.path.join(SAVE_DIR, "test_residuals_hist.png"))
 plot_bar_metric_comparison(comparison_df, "VAL",  os.path.join(SAVE_DIR, "val_model_vs_baselines.png"))
 plot_bar_metric_comparison(comparison_df, "TEST", os.path.join(SAVE_DIR, "test_model_vs_baselines.png"))
+_tock(t0, "Plotting (all figures)")
 
 # =========================
 # 10) ADVANCED METRICS: Pearson, DTW, F1(extreme) + plots
@@ -421,13 +470,30 @@ def _advanced_metrics_block(split_name, y_true_raw, y_pred_raw, baselines_dict, 
     plt.title(f"{split_name} — F1 (higher better)"); plt.ylabel("F1 score")
     _savefig(os.path.join(SAVE_DIR, f"{save_prefix}_f1_bar.png")); plt.close()
 
-# —— 调用（也在你上一版里丢了）
+t0 = _tic()
 baselines_val = {"Baseline-mean": yhat_val_mean, "Baseline-median": yhat_val_median, "Baseline-persist": yhat_val_pers}
 baselines_tst = {"Baseline-mean": yhat_tst_mean, "Baseline-median": yhat_tst_median, "Baseline-persist": yhat_tst_pers}
 _advanced_metrics_block("VAL",  y_val_raw,  val_pred_raw,  baselines_val,  save_prefix="val")
 _advanced_metrics_block("TEST", y_test_raw, test_pred_raw, baselines_tst, save_prefix="test")
+_tock(t0, "Advanced metrics (Pearson/DTW/F1)")
 
 # =========================
 # 11) OPTIONAL PR CURVE (off)
 # =========================
 print("\n[Info] Classification view disabled (set CLASSIFICATION_VIEW=True to compute PR curves).")
+
+# =========================
+# 12) Save runtime report & total time
+# =========================
+total_sec = _tock(t0_all, "TOTAL (end-to-end)")
+extra = {
+    "Rows(after_drop)": float(n_rows),
+    "Features": float(n_features),
+    "Train_rows": float(X_train_df.shape[0]),
+    "Val_rows": float(X_val_df.shape[0]),
+    "Test_rows": float(X_test_df.shape[0]),
+    "n_jobs": float(N_JOBS),
+    "CV_splits": float(N_SPLITS),
+    "Search_iter_ET": float(N_ITER_C),
+}
+_save_runtime_report(SAVE_DIR, extra)
