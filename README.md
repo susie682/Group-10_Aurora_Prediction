@@ -47,6 +47,7 @@ The dataset is split into 6 years for training, 1 year for validation, and 2 yea
 
 - **Random Forest:** Handles tabular and non-linear data, robust to noise and missing values, interpretable via feature importance and SHAP values.
 - **XGBoost:** Uses gradient boosting and regularization, interpretable, robust to missing data, highlights key factors.
+- **CatBoost:** Gradient boosting with ordered boosting; strong baseline on tabular data, robust to noisy labels and class imbalance, minimal tuning required.
 - **CNN:** Excels at spatial feature fusion, scale robustness, and capturing temporal patterns.
 
 All models are trained on the same data, tested under different Kp levels, and tuned for hyperparameters (tree number/depth, learning rate, CNN layers/filters). Performance is measured by R² (closer to 1 is better) and Mean Squared Error (lower is better).
@@ -64,7 +65,124 @@ All models are trained on the same data, tested under different Kp levels, and t
 
 ---
 
-For code usage and experiment reproduction, please refer to the scripts and comments in each subdirectory. Contributions and suggestions are welcome!
+## How to Use This Codebase
+
+Follow these steps to set up the environment, prepare data, and reproduce results.
+
+### 1) Environment Setup
+
+- Python 3.9–3.11 recommended.
+- Install dependencies (choose your preferred DL framework if running CNNs):
+
+  - Core: numpy, pandas, scikit-learn, matplotlib, seaborn, xgboost, catboost
+  - For CNNs: tensorflow or torch+torchvision
+  - For data utilities: opencv-python, pillow, netCDF4, xarray
+
+Example (zsh):
+
+- pip install numpy pandas scikit-learn matplotlib seaborn xgboost catboost opencv-python pillow netCDF4 xarray
+- For CNNs, pick one: pip install tensorflow OR pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+### 2) Data Availability
+
+- Public datasets are referenced under `datasets/` (ERA5, Kp, DMSP, keograms). The repository includes merged CSVs such as `final-planb-24.csv`, `final.csv`, etc., which can be used directly to run models without re-downloading raw data.
+- If you want to rebuild the merged CSVs from scratch, use the scripts in `datasets/` (see Script Map below).
+
+### 3) Reproducing Key Results
+
+From the repository root (`Group-10_760/`), run:
+
+- Random Forest baseline and figures (writes to `Algorithm/figs_rf/`):
+  - python Algorithm/RandomForest.py
+
+- XGBoost mapping baseline (satellite→ground mapping):
+  - python Algorithm/mapping/mapping_xgboost.py
+
+- Classical mapping baseline (non-boosted):
+  - python Algorithm/mapping/mapping.py
+
+- CNN models (two training plans):
+  - python "Algorithm/CNN—training-planA.py"
+  - python "Algorithm/CNN—training-planB.py"
+
+Notes:
+- These scripts read default CSVs from `datasets/` (e.g., `final-planb-24.csv`, `final.csv`). Adjust paths inside scripts if your data is elsewhere.
+- Random Forest outputs metrics/plots under `Algorithm/figs_rf/` (already structured in this repo).
+
+### 4) Optional: Rebuild Processed Datasets
+
+If you want to regenerate processed CSVs:
+
+- Merge and preprocess end-to-end:
+  - python datasets/final_merge.py
+
+- Individual steps (as needed):
+  - Keogram processing/merge: python datasets/KeogramProcessing.py; python datasets/keogram_merge.py
+  - Kp merge: python datasets/kp_merge.py
+  - Climate/ERA5 merge: python datasets/climate_merge.py; see `datasets/era5/*.py` for CSV conversions
+  - Satellite merge: python datasets/satellite_merge.py
+  - Cleaning/augmentation: python datasets/data-preprocessed.py; python datasets/data-augmented.py
+
+---
+
+## Repository Structure and Script Map
+
+Top-level:
+- `Algorithm/`
+  - `RandomForest.py`: Train/evaluate Random Forest; saves metrics/plots to `Algorithm/figs_rf/`.
+  - `RandomForest-DataPre.py`: Data preprocessing/utilities for the RF pipeline.
+  - `RandomForest-Log.py`: RF experiments and logging/alternative target handling.
+  - `CNN—training-planA.py`: CNN training script (Plan A configuration: architecture/hyperparameters).
+  - `CNN—training-planB.py`: CNN training script (Plan B configuration: alternative architecture/hyperparameters).
+  - `CatBoost.ipynb`: CatBoost experiment notebook.
+  - `planb_xgboost.ipynb`: XGBoost experiment notebook.
+  - `mapping/`
+    - `mapping.py`: Baseline mapping from satellite/geophysical inputs to ground intensity.
+    - `mapping_xgboost.py`: Gradient-boosted mapping model for satellite→ground conversion.
+- `datasets/`
+  - `KeogramProcessing.py`: Extract segment-wise brightness from keogram images; filter artifacts.
+  - `detect_vertical_bar.py`: Detect/remove vertical bar artifacts in keograms.
+  - `keogram_merge.py`: Merge daily keogram series into time-aligned tables.
+  - `kp_merge.py`: Load and align Kp index in three-hour windows.
+  - `climate_merge.py`: Integrate ERA5 climate features.
+  - `satellite_merge.py`: Integrate DMSP/auroral radiance features.
+  - `final_merge.py`: End-to-end merge to produce final CSVs used by models.
+  - `data-preprocessed.py`: Additional cleaning/feature engineering for model-ready tables.
+  - `data-augmented.py`: Optional data augmentation for robustness.
+  - `dmsp/`
+    - `download.py`: Download DMSP SSUSI data blocks.
+    - `reading.py`: Read/parse DMSP files.
+    - `process_dmsp2.py`: Convert and preprocess DMSP records to tabular form.
+  - `era5/`
+    - `convert_humidity_csv.py`, `convert_tp_csv_24.py`, etc.: ERA5 NetCDF-to-CSV converters and utilities.
+  - `keogram/`, `Kp/`: Raw or intermediate inputs (if present).
+- `Algorithm/figs_rf/`: RF evaluation artifacts (plots, metrics, timings).
+
+---
+
+## Reproducibility and Provenance
+
+- Scripted entry points for replication:
+  - Random Forest: `Algorithm/RandomForest.py`
+  - XGBoost mapping: `Algorithm/mapping/mapping_xgboost.py`
+  - CNNs: `Algorithm/CNN—training-planA.py`, `Algorithm/CNN—training-planB.py`
+- Public datasets are used; the merged CSVs under `datasets/` allow immediate reproduction without re-downloading raw data.
+
+## Use and License Notes
+
+- Code must not be copied or redistributed arbitrarily. Please request permission from Group 10 before reuse beyond academic replication.
+- Datasets referenced are public and can be used in accordance with their respective licenses. Cite data sources when publishing results.
+- We avoid leaving files named "Untitled" and do not ship empty README files.
+
+## Troubleshooting
+
+- If a script cannot find a CSV, verify the relative path from repo root and that the CSV exists under `datasets/`.
+- CNN training requires either TensorFlow or PyTorch; install one framework as noted above.
+- For large file handling (e.g., ERA5/DMSP), ensure sufficient disk space and memory.
+
+---
+
+For code usage and experiment reproduction, use the scripted entry points listed above. Contributions and suggestions are welcome.
 
 ---
 

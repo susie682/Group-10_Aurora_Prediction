@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs
+*.log
+
+# OS thumbnails (Windows, just in case)
+Thumbs.db
+ehthumbs.db
