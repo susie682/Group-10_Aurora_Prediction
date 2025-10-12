@@ -192,7 +192,7 @@ def pearson_corr(y_true, y_pred):
         return np.nan
     return float(np.corrcoef(a, b)[0, 1])
 
-# === 按你同学的口径重写 DTW（L1 + Sakoe–Chiba + (n+m) 归一化） ===
+
 def dtw_distance(s, t, window_ratio=None):
     """
     Dynamic Time Warping with Sakoe–Chiba band and length normalization.
