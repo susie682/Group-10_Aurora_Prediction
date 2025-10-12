@@ -55,9 +55,9 @@ USE_WINSOR_Y      = True     # 保留极值 + 轻压尾
 Y_WINSOR_UP_Q     = 0.995
 USE_LOG1P_TARGET  = True     # y -> log1p(y)
 
-# 上尾样本重加权（回调到更平衡的一档）
+# 上尾样本重加权
 USE_REWEIGHT      = True
-REWEIGHT_REF_Q    = 0.96     # 起始提权分位
+REWEIGHT_REF_Q    = 0.96
 REWEIGHT_ALPHA    = 12.0
 REWEIGHT_GAMMA    = 5.0
 
@@ -65,6 +65,12 @@ REWEIGHT_GAMMA    = 5.0
 USE_SMEARING      = True
 SMEARING_MODE     = "bin"    # "global" or "bin"
 SMEARING_BINS     = 12
+
+# ----- DTW 记分风格（与 XGB 对齐）-----
+# SCALE: "raw"（原始尺度）或 "z"（z-score 标准化后仅比较形状）
+# MODE : "per_step"（按长度归一化，推荐）或 "sum"（总和）
+DTW_SCALE = "raw"       # <- 若 XGB 用 z-score，请改为 "z"
+DTW_MODE  = "per_step"  # <- 若 XGB 报的是总和，请改为 "sum"
 
 # ---------- Timing helpers ----------
 timings = {}
@@ -100,7 +106,7 @@ print("Shape before drop:", df.shape)
 print("Time range:", df["time"].min(), "->", df["time"].max(), flush=True)
 
 # =========================
-# 2) Target & AR features  （注意：先加特征，再抽 features 列表）
+# 2) Target & AR features
 # =========================
 TARGET_COL = "keogram_mean"
 before = len(df)
@@ -108,15 +114,13 @@ df = df.dropna(subset=[TARGET_COL]).copy()
 after = len(df)
 print(f"Dropped rows with NaN target ({TARGET_COL}): {before - after}", flush=True)
 
-# 保证时序正确
 df = df.sort_values("time")
 
-# —— 自回归/短窗统计，全部用 shift(1) 避免信息泄漏 ——
+# —— 自回归/短窗统计，全部 shift(1)（无泄漏） ——
 df["y_lag1"]       = df[TARGET_COL].shift(1)
 df["y_rollmean_6"] = df[TARGET_COL].rolling(6, min_periods=1).mean().shift(1)
 df["y_rollmax_6"]  = df[TARGET_COL].rolling(6, min_periods=1).max().shift(1)
 
-# 在加完 AR 特征之后再构造 features
 drop_cols = ["time", "keogram_mean", "keogram_median", "keogram_max"]
 features = [c for c in df.columns if c not in drop_cols]
 assert TARGET_COL not in features
@@ -128,16 +132,9 @@ y_all_raw = df[TARGET_COL].values
 # 3) Time split
 # =========================
 t0 = tic()
-# ---- 2012–2020 切分（默认）----
 train_idx = df[(df["time"] < "2018-01-01")].index
 val_idx   = df[(df["time"] >= "2018-01-01") & (df["time"] < "2019-01-01")].index
 test_idx  = df[(df["time"] >= "2019-01-01") & (df["time"] < "2021-01-01")].index
-
-# ---- 如需 2012–2024 切分，替换为下列注释 ----
-# train_idx = df[df["time"] <  "2024-01-01"].index
-# val_idx   = df[(df["time"] >= "2024-01-01") & (df["time"] < "2024-07-01")].index
-# test_idx  = df[(df["time"] >= "2024-07-01") & (df["time"] < "2025-01-01")].index
-
 timings["split_time"] = toc(t0)
 
 print("Split sizes:",
@@ -199,7 +196,6 @@ else:
     sample_weight_train = None
 timings["target_engineering"] = toc(t0)
 
-# （可选）打印分布诊断
 def _summ(name, arr):
     arr = np.asarray(arr, float)
     qs = np.quantile(arr, [0.5, 0.9, 0.95, 0.99])
@@ -250,8 +246,7 @@ def _tail_mae_raw_scorer(y_true_t, y_pred_t, q=0.90):
     return -float(mean_absolute_error(y_true_raw[m], y_pred_raw[m]))
 
 def _combo_mae(y_true_t, y_pred_t, lam=LAM_COMBO):
-    # lam 越大越侧重整体，越小越侧重上尾
-    mae_all  = -_raw_mae_scorer(y_true_t, y_pred_t)               # 转为正值
+    mae_all  = -_raw_mae_scorer(y_true_t, y_pred_t)
     mae_tail = -_tail_mae_raw_scorer(y_true_t, y_pred_t, 0.90)
     return -(lam * mae_all + (1 - lam) * mae_tail)
 
@@ -349,7 +344,7 @@ print(f"  Selected CV {REFIT_METRIC.upper()}: {-best_search.best_score_:.4f}")
 best_estimator = best_search.best_estimator_
 
 # =========================
-# （可选）Smearing 纠偏（训练集上拟合因子）
+# （可选）Smearing 纠偏
 # =========================
 smearing = {"mode": "off", "global": 1.0}
 if USE_SMEARING:
@@ -358,7 +353,7 @@ if USE_SMEARING:
     else:
         train_pred_t = best_estimator.predict(X_train)
     y_train_t_for_smear = _fwd(y_train_cap)
-    eps = y_train_t_for_smear - train_pred_t   # log 残差
+    eps = y_train_t_for_smear - train_pred_t
     smearing["mode"] = SMEARING_MODE
     if SMEARING_MODE == "global":
         smearing["global"] = float(np.mean(np.exp(eps)))
@@ -399,29 +394,47 @@ def _pearson_corr(y_true, y_pred):
     if m.sum() < 2: return np.nan
     return float(np.corrcoef(a[m], b[m])[0,1])
 
-# Try to use fastdtw if available; else fallback to O(n^2) DTW
+# ---- 统一的 DTW（与 XGB 对齐）----
+def _prepare_for_dtw(y_true_raw, y_pred_raw):
+    a = np.asarray(y_true_raw, dtype=float)
+    b = np.asarray(y_pred_raw, dtype=float)
+    m = np.isfinite(a) & np.isfinite(b)
+    a, b = a[m], b[m]
+    if DTW_SCALE == "z":
+        # z-normalization（形状相似度）
+        a_std = np.std(a)
+        b_std = np.std(b)
+        if a_std > 0: a = (a - np.mean(a)) / a_std
+        else: a = a - np.mean(a)
+        if b_std > 0: b = (b - np.mean(b)) / b_std
+        else: b = b - np.mean(b)
+    return a, b
+
 try:
     from fastdtw import fastdtw
-    def _dtw_distance(y_true, y_pred):
-        a = np.asarray(y_true, dtype=float); b = np.asarray(y_pred, dtype=float)
-        m = np.isfinite(a) & np.isfinite(b); a=a[m]; b=b[m]
-        if len(a)==0 or len(b)==0: return np.nan
-        dist, _ = fastdtw(a, b)
-        return float(dist)
+    _use_fdtw = True
 except Exception:
-    def _dtw_distance(y_true, y_pred):
-        a = np.asarray(y_true, dtype=float); b = np.asarray(y_pred, dtype=float)
-        m = np.isfinite(a) & np.isfinite(b); a=a[m]; b=b[m]
-        if len(a)==0 or len(b)==0: return np.nan
-        n, mlen = len(a), len(b)
-        D = np.full((n+1, mlen+1), np.inf, dtype=float)
+    _use_fdtw = False
+
+def _dtw_distance(y_true_raw, y_pred_raw):
+    a, b = _prepare_for_dtw(y_true_raw, y_pred_raw)
+    if len(a) == 0 or len(b) == 0: return np.nan
+    if _use_fdtw:
+        dist, _ = fastdtw(a, b, dist=lambda x, y: abs(x - y))  # L1
+    else:
+        # 朴素 DTW
+        n, m = len(a), len(b)
+        D = np.full((n+1, m+1), np.inf, dtype=float)
         D[0,0] = 0.0
         for i in range(1, n+1):
             ai = a[i-1]
-            for j in range(1, mlen+1):
+            for j in range(1, m+1):
                 cost = abs(ai - b[j-1])
                 D[i,j] = cost + min(D[i-1,j], D[i,j-1], D[i-1,j-1])
-        return float(D[n, mlen])
+        dist = float(D[n, m])
+    if DTW_MODE == "per_step":
+        dist = dist / len(a)
+    return float(dist)
 
 def _f1_extreme(y_true_raw, y_pred_raw, q=0.90):
     thr = float(np.quantile(y_true_raw, q))
@@ -437,7 +450,6 @@ def _f1_extreme(y_true_raw, y_pred_raw, q=0.90):
 # =========================
 def _eval_raw(split, y_true_raw, y_pred_t, prefix):
     t0 = tic()
-    # 反变换 + 可选 smearing
     if USE_SMEARING and USE_LOG1P_TARGET:
         y_pred_raw = _apply_smearing(y_pred_t, smearing)
     else:
@@ -449,13 +461,13 @@ def _eval_raw(split, y_true_raw, y_pred_t, prefix):
     mae = mean_absolute_error(y_true_raw, y_pred_raw)
     r2  = r2_score(y_true_raw, y_pred_raw)
     pear = _pearson_corr(y_true_raw, y_pred_raw)
-    dtw  = _dtw_distance(y_true_raw, y_pred_raw)
+    dtw  = _dtw_distance(y_true_raw, y_pred_raw)  # <- 统一 DTW
     p90, r90, f190, thr = _f1_extreme(y_true_raw, y_pred_raw, q=0.90)
     timings[f"{prefix}_metrics"] = toc(t1)
 
     print(f"{split} -> MSE: {mse:.4f}  MAE: {mae:.4f}  R2: {r2:.4f}  |  "
-          f"Pearson: {pear:.4f}  DTW: {dtw:.4f}  F1@q=0.90: {f190:.4f} (P={p90:.4f}, R={r90:.4f}, thr={thr:.4f})",
-          flush=True)
+          f"Pearson: {pear:.4f}  DTW: {dtw:.4f}  F1@q=0.90: {f190:.4f} "
+          f"(P={p90:.4f}, R={r90:.4f}, thr={thr:.4f})", flush=True)
 
     return y_pred_raw, {
         "RMSE": float(np.sqrt(mse)),
@@ -501,7 +513,6 @@ yhat_tst_mean   = baseline_mean(y_test_raw)
 yhat_tst_median = baseline_median(y_test_raw)
 yhat_tst_pers   = baseline_persist(y_test_raw)
 
-# ---- 基础（兼容旧下游）：RMSE/MAE ----
 rows_basic = []
 rows_basic.append(("VAL",  "Model(log-target)", *_metrics_basic(y_val_raw,  val_pred_raw)))
 rows_basic.append(("VAL",  "Baseline-mean",     *_metrics_basic(y_val_raw,  yhat_val_mean)))
@@ -515,7 +526,6 @@ rows_basic.append(("TEST", "Baseline-persist",  *_metrics_basic(y_test_raw, yhat
 
 comparison_df = pd.DataFrame(rows_basic, columns=["Split", "Method", "RMSE", "MAE"])
 
-# ---- 扩展表：R2 / Pearson / DTW / F1@q=0.90 ----
 def _all_metrics_row(split, method, y_true, y_pred, override=None):
     if override is not None:
         d = {"Split":split, "Method":method}
@@ -526,7 +536,7 @@ def _all_metrics_row(split, method, y_true, y_pred, override=None):
     mae  = float(mean_absolute_error(y_true, y_pred))
     r2   = float(r2_score(y_true, y_pred))
     pear = _pearson_corr(y_true, y_pred)
-    dtw  = _dtw_distance(y_true, y_pred)
+    dtw  = _dtw_distance(y_true, y_pred)  # <- 统一 DTW
     p90, r90, f190, thr = _f1_extreme(y_true, y_pred, q=0.90)
     return {
         "Split": split, "Method": method,
@@ -557,7 +567,7 @@ print(advanced_df.to_string(index=False))
 
 # ---- 保存表格 ----
 if SAVE_TABLES:
-    comp_csv  = os.path.join(SAVE_DIR, "comparison_metrics.csv")   # 升级为多列
+    comp_csv  = os.path.join(SAVE_DIR, "comparison_metrics.csv")
     comp_html = os.path.join(SAVE_DIR, "comparison_metrics.html")
     advanced_csv  = os.path.join(SAVE_DIR, "advanced_metrics.csv")
     advanced_html = os.path.join(SAVE_DIR, "advanced_metrics.html")
@@ -645,7 +655,7 @@ plot_residuals_hist(y_test_raw, test_pred_raw, "TEST", os.path.join(SAVE_DIR, "t
 plot_bar_metric_comparison(advanced_df, "VAL",  os.path.join(SAVE_DIR, "val_model_vs_baselines.png"))
 plot_bar_metric_comparison(advanced_df, "TEST", os.path.join(SAVE_DIR, "test_model_vs_baselines.png"))
 
-# ---- 可选：新增两张紧凑对比图 ----
+# ---- 可选：小图 ----
 if GENERATE_EXTRA_FIGS:
     def _bar_simple(df, split, metric_name, save_path):
         sub = df[df["Split"] == split]
@@ -704,7 +714,6 @@ stats = {
 }
 timings.update(stats)
 
-# also compute aggregates
 timings["search_total_fit"] = float(
     timings.get("search_A_fit", 0.0) +
     timings.get("search_B_fit", 0.0) +
