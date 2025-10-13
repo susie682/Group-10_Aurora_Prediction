@@ -95,15 +95,20 @@ From the repository root (`Group-10_760/`), run:
 - Random Forest baseline and figures (writes to `Algorithm/figs_rf/`):
   - python Algorithm/RandomForest.py
 
+- CatBoost baseline (tabular boosting; optional logging run):
+  - python Algorithm/CatBoost.py
+  - Optional: python Algorithm/CatBoost-log.py
+
 - XGBoost mapping baseline (satellite→ground mapping):
   - python Algorithm/mapping/mapping_xgboost.py
 
 - Classical mapping baseline (non-boosted):
   - python Algorithm/mapping/mapping.py
 
-- CNN models (two training plans):
+- CNN models (two training plans; optional logging run):
   - python "Algorithm/CNN—training-planA.py"
   - python "Algorithm/CNN—training-planB.py"
+  - Optional: python "Algorithm/CNN—training-Log.py"
 
 Notes:
 - These scripts read default CSVs from `datasets/` (e.g., `final-planb-24.csv`, `final.csv`). Adjust paths inside scripts if your data is elsewhere.
@@ -132,9 +137,12 @@ Top-level:
   - `RandomForest.py`: Train/evaluate Random Forest; saves metrics/plots to `Algorithm/figs_rf/`.
   - `RandomForest-DataPre.py`: Data preprocessing/utilities for the RF pipeline.
   - `RandomForest-Log.py`: RF experiments and logging/alternative target handling.
+  - `CatBoost.py`: Train/evaluate CatBoost baseline on tabular features.
+  - `CatBoost-Datapre.py`: Data preprocessing/utilities for the CatBoost pipeline.
+  - `CatBoost-log.py`: CatBoost experiments with logging and alternative targets.
   - `CNN—training-planA.py`: CNN training script (Plan A configuration: architecture/hyperparameters).
   - `CNN—training-planB.py`: CNN training script (Plan B configuration: alternative architecture/hyperparameters).
-  - `CatBoost.ipynb`: CatBoost experiment notebook.
+  - `CNN—training-Log.py`: CNN training with logging/ablation runs.
   - `planb_xgboost.ipynb`: XGBoost experiment notebook.
   - `mapping/`
     - `mapping.py`: Baseline mapping from satellite/geophysical inputs to ground intensity.
@@ -149,6 +157,7 @@ Top-level:
   - `final_merge.py`: End-to-end merge to produce final CSVs used by models.
   - `data-preprocessed.py`: Additional cleaning/feature engineering for model-ready tables.
   - `data-augmented.py`: Optional data augmentation for robustness.
+  - `filterCSV.py`: Helper script to filter or subset merged CSVs.
   - `dmsp/`
     - `download.py`: Download DMSP SSUSI data blocks.
     - `reading.py`: Read/parse DMSP files.
@@ -164,6 +173,7 @@ Top-level:
 
 - Scripted entry points for replication:
   - Random Forest: `Algorithm/RandomForest.py`
+  - CatBoost: `Algorithm/CatBoost.py`
   - XGBoost mapping: `Algorithm/mapping/mapping_xgboost.py`
   - CNNs: `Algorithm/CNN—training-planA.py`, `Algorithm/CNN—training-planB.py`
 - Public datasets are used; the merged CSVs under `datasets/` allow immediate reproduction without re-downloading raw data.
